@@ -9,6 +9,7 @@ export default function PDFViewerContent({ pdfUrl, signatures, onSignatureMove }
   const [pageNumber, setPageNumber] = useState(1)
   const [loadError, setLoadError] = useState(null)
   const containerRef = useRef(null)
+  const pageRef = useRef(null)
   const [draggedSig, setDraggedSig] = useState(null)
   const [activePointerId, setActivePointerId] = useState(null)
   const [pageScale, setPageScale] = useState(1)
@@ -26,22 +27,63 @@ export default function PDFViewerContent({ pdfUrl, signatures, onSignatureMove }
     e.preventDefault()
     e.stopPropagation()
     // capture pointer so we continue receiving move/up events
-    try { e.target.setPointerCapture?.(e.pointerId) } catch (err) {}
+    try {
+      if (e.target.setPointerCapture) e.target.setPointerCapture(e.pointerId)
+    } catch (err) {}
     setDraggedSig(sigId)
     setActivePointerId(e.pointerId)
   }
 
-  const handlePointerMove = (e) => {
-    if (!draggedSig || activePointerId != null && e.pointerId !== activePointerId || !containerRef.current) return
+  // Fallback for touch devices that don't support pointer events (legacy iOS Safari)
+  useEffect(() => {
+    const node = pageRef.current
+    if (!node) return
+    if ('ontouchstart' in window && !window.PointerEvent) {
+      let touchMoveHandler = (e) => {
+        if (!draggedSig) return
+        const touch = e.touches[0]
+        const rect = node.getBoundingClientRect()
+        const x = touch.clientX - rect.left
+        const y = touch.clientY - rect.top
+        // Clamp to page bounds
+        const clampedX = Math.max(0, Math.min(x, rect.width))
+        const clampedY = Math.max(0, Math.min(y, rect.height))
+        onSignatureMove(draggedSig, {
+          x: clampedX / pageScale,
+          y: clampedY / pageScale,
+          page: pageNumber - 1
+        })
+      }
+      let touchEndHandler = () => {
+        setDraggedSig(null)
+        setActivePointerId(null)
+      }
+      node.addEventListener('touchmove', touchMoveHandler, { passive: false })
+      node.addEventListener('touchend', touchEndHandler)
+      node.addEventListener('touchcancel', touchEndHandler)
+      return () => {
+        node.removeEventListener('touchmove', touchMoveHandler)
+        node.removeEventListener('touchend', touchEndHandler)
+        node.removeEventListener('touchcancel', touchEndHandler)
+      }
+    }
+  }, [draggedSig, pageScale, pageNumber, onSignatureMove])
 
-    const rect = containerRef.current.getBoundingClientRect()
+  const handlePointerMove = (e) => {
+    if (!draggedSig || (activePointerId != null && e.pointerId !== activePointerId) || !pageRef.current) return
+
+    const rect = pageRef.current.getBoundingClientRect()
     const x = e.clientX - rect.left
     const y = e.clientY - rect.top
 
+    // Clamp to page bounds
+    const clampedX = Math.max(0, Math.min(x, rect.width))
+    const clampedY = Math.max(0, Math.min(y, rect.height))
+
     // Convert rendered pixels back to original-document coordinates by dividing by pageScale
     onSignatureMove(draggedSig, {
-      x: Math.max(0, x / pageScale),
-      y: Math.max(0, y / pageScale),
+      x: clampedX / pageScale,
+      y: clampedY / pageScale,
       page: pageNumber - 1
     })
   }
@@ -87,8 +129,24 @@ export default function PDFViewerContent({ pdfUrl, signatures, onSignatureMove }
   }
 
   return (
-    <div className="relative border rounded-lg overflow-hidden shadow-xl max-w-4xl mx-auto bg-gray-50">
-      <div ref={containerRef} className="relative inline-block w-full">
+    <div className="relative border rounded-lg overflow-hidden shadow-xl max-w-4xl mx-auto bg-gray-50"
+      style={{
+        // Allow horizontal scroll on mobile
+        overflowX: 'auto',
+        WebkitOverflowScrolling: 'touch',
+        maxWidth: '100vw',
+      }}
+    >
+      <div
+        ref={containerRef}
+        className="relative w-full"
+        style={{
+          // Make PDF container responsive
+          minHeight: '300px',
+          maxWidth: '100vw',
+          overflow: 'visible',
+        }}
+      >
         {pdfUrl && (
           <Document
             file={pdfUrl}
@@ -107,61 +165,77 @@ export default function PDFViewerContent({ pdfUrl, signatures, onSignatureMove }
               </div>
             }
           >
-            <div className="relative inline-block">
-              <Page
-                pageNumber={pageNumber}
-                scale={1.5}
-                renderTextLayer={false}
-                renderAnnotationLayer={false}
-                onLoadSuccess={(page) => {
-                  if (page && page.originalWidth) {
-                    setPageScale(page.width / page.originalWidth)
-                  }
-                }}
-                onRenderError={(error) => console.error('Page render error:', error)}
-              />
+            <div
+              className="relative flex justify-center items-center w-full"
+              style={{ minWidth: 0 }}
+            >
+              <div style={{ position: 'relative', display: 'inline-block' }} ref={pageRef}>
+                <Page
+                  pageNumber={pageNumber}
+                  scale={typeof window !== 'undefined' && window.innerWidth < 600 ? 0.7 : 1.5}
+                  renderTextLayer={false}
+                  renderAnnotationLayer={false}
+                  onLoadSuccess={(page) => {
+                    if (page && page.originalWidth) {
+                      setPageScale(page.width / page.originalWidth)
+                    }
+                  }}
+                  onRenderError={(error) => console.error('Page render error:', error)}
+                />
+                {/* Signature Overlay - covers the Page exactly */}
+                <div
+                  className="absolute top-0 left-0 w-full h-full z-20"
+                  style={{
+                    touchAction: draggedSig ? 'none' : 'pan-x pan-y',
+                    pointerEvents: 'auto',
+                  }}
+                >
+                  {currentPageSigs.map((sig) => {
+                    // Compute pixel positions/sizes using pageScale so overlay matches rendered page size
+                    const leftPx = (sig.position.x || 0) * pageScale
+                    const topPx = (sig.position.y || 0) * pageScale
+                    const widthPx = (sig.width || 150) * pageScale
+                    const heightPx = (sig.height || 60) * pageScale
 
-              {/* Signature Overlay */}
-              <div className="absolute inset-0" style={{ touchAction: 'none' }}>
-                {currentPageSigs.map((sig) => {
-                  // Compute pixel positions/sizes using pageScale so overlay matches rendered page size
-                  const leftPx = (sig.position.x || 0) * pageScale
-                  const topPx = (sig.position.y || 0) * pageScale
-                  const widthPx = (sig.width || 150) * pageScale
-                  const heightPx = (sig.height || 60) * pageScale
-
-                  return (
-                    <div
-                      key={sig.id}
-                      className="absolute group cursor-move border-2 border-blue-500 hover:border-blue-700 hover:shadow-lg transition-all"
-                      style={{
-                        left: `${leftPx}px`,
-                        top: `${topPx}px`,
-                        width: `${widthPx}px`,
-                        height: `${heightPx}px`,
-                        minWidth: '80px',
-                        minHeight: '40px',
-                        touchAction: 'none'
-                      }}
-                      onPointerDown={(e) => handleSignaturePointerDown(e, sig.id)}
-                    >
-                      <img
-                        src={sig.url}
-                        alt="Signature"
-                        className="w-full h-full object-cover"
-                        draggable={false}
-                      />
-                      <div className="absolute -top-8 right-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button
-                          className="px-2 py-1 bg-red-500 text-white text-sm rounded"
-                          onClick={() => onSignatureMove(sig.id, { deleted: true })}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                    return (
+                      <div
+                        key={sig.id}
+                        className="absolute group border-2 border-blue-500 hover:border-blue-700 hover:shadow-lg transition-all bg-white"
+                        style={{
+                          left: `${leftPx}px`,
+                          top: `${topPx}px`,
+                          width: `${widthPx}px`,
+                          height: `${heightPx}px`,
+                          minWidth: '60px',
+                          minHeight: '30px',
+                          borderRadius: '8px',
+                          touchAction: draggedSig === sig.id ? 'none' : 'auto',
+                          zIndex: 30,
+                          boxShadow: draggedSig === sig.id ? '0 0 0 4px #3b82f6' : undefined,
+                          cursor: draggedSig === sig.id ? 'grabbing' : 'grab',
+                        }}
+                        onPointerDown={(e) => handleSignaturePointerDown(e, sig.id)}
+                      >
+                        <img
+                          src={sig.url}
+                          alt="Signature"
+                          className="w-full h-full object-contain"
+                          draggable={false}
+                          style={{ pointerEvents: 'none', userSelect: 'none' }}
+                        />
+                        <div className="absolute -top-8 right-0 opacity-100 md:opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            className="px-3 py-2 bg-red-500 text-white text-base rounded-lg shadow-md active:scale-95"
+                            style={{ minWidth: 36, minHeight: 36 }}
+                            onClick={() => onSignatureMove(sig.id, { deleted: true })}
+                          >
+                            <Trash2 className="w-5 h-5" />
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  )
-                })}
+                    )
+                  })}
+                </div>
               </div>
             </div>
           </Document>
@@ -170,21 +244,23 @@ export default function PDFViewerContent({ pdfUrl, signatures, onSignatureMove }
 
       {/* Page Navigation */}
       {numPages > 1 && (
-        <div className="flex justify-center items-center gap-4 mt-4 bg-gray-100 p-3 rounded-b-lg">
+        <div className="flex flex-col sm:flex-row justify-center items-center gap-4 mt-4 bg-gray-100 p-3 rounded-b-lg">
           <button
             onClick={() => setPageNumber(p => Math.max(1, p - 1))}
             disabled={pageNumber <= 1}
-            className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50 hover:bg-blue-700"
+            className="px-6 py-3 bg-blue-600 text-white rounded-lg text-base font-semibold disabled:opacity-50 hover:bg-blue-700"
+            style={{ minWidth: 100 }}
           >
             Previous
           </button>
-          <span className="font-medium text-gray-700">
+          <span className="font-medium text-gray-700 text-base">
             Page {pageNumber} of {numPages}
           </span>
           <button
             onClick={() => setPageNumber(p => Math.min(numPages, p + 1))}
             disabled={pageNumber >= numPages}
-            className="px-4 py-2 bg-blue-600 text-white rounded disabled:opacity-50 hover:bg-blue-700"
+            className="px-6 py-3 bg-blue-600 text-white rounded-lg text-base font-semibold disabled:opacity-50 hover:bg-blue-700"
+            style={{ minWidth: 100 }}
           >
             Next
           </button>
