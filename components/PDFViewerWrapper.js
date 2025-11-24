@@ -2,9 +2,9 @@
 
 import dynamic from 'next/dynamic'
 
-// Dynamically import the new easy mode PDF viewer
-const PDFViewerEasy = dynamic(
-  () => import('./PDFViewerEasy'),
+// Dynamically import the responsive PDF viewer
+const PDFViewerResponsive = dynamic(
+  () => import('./PDFViewerResponsive'),
   { 
     ssr: false,
     loading: () => (
@@ -17,5 +17,5 @@ const PDFViewerEasy = dynamic(
 )
 
 export default function PDFViewerWrapper(props) {
-  return <PDFViewerEasy {...props} />
+  return <PDFViewerResponsive {...props} />
 }

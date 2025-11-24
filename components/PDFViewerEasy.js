@@ -1,12 +1,13 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { Document, Page, pdfjs } from 'react-pdf'
 
 export default function PDFViewerEasy({ pdfUrl, signatures, onSignatureMove }) {
   const [numPages, setNumPages] = useState(0)
   const [pageNumber, setPageNumber] = useState(1)
   const [pageScale, setPageScale] = useState(1)
+  const pageContainerRef = useRef(null)
   const [dragging, setDragging] = useState(null)
 
   if (typeof window !== 'undefined' && pdfjs && !pdfjs.GlobalWorkerOptions.workerSrc) {
@@ -15,31 +16,44 @@ export default function PDFViewerEasy({ pdfUrl, signatures, onSignatureMove }) {
 
   const currentPageSigs = signatures.filter(sig => sig.page === pageNumber - 1)
 
-  const handleSigMouseDown = (e, sigId, sig) => {
+  const handleMouseDown = (e, sigId, sig) => {
     e.preventDefault()
     e.stopPropagation()
-    
+
+    const elem = e.currentTarget
+    const rect = elem.getBoundingClientRect()
+
     setDragging({
-      id: sigId,
+      sigId,
       startX: e.clientX,
       startY: e.clientY,
-      sigX: sig.position?.x || 0,
-      sigY: sig.position?.y || 0,
+      currentX: (sig.position?.x || 0),
+      currentY: (sig.position?.y || 0),
     })
   }
 
   const handleMouseMove = (e) => {
-    if (!dragging) return
+    if (!dragging || !pageContainerRef.current || pageScale === 0) return
 
-    const deltaX = e.clientX - dragging.startX
-    const deltaY = e.clientY - dragging.startY
+    const container = pageContainerRef.current
+    const rect = container.getBoundingClientRect()
 
-    const newX = dragging.sigX + deltaX / pageScale
-    const newY = dragging.sigY + deltaY / pageScale
+    // Calculate how much the mouse moved in pixels
+    const movedX = e.clientX - dragging.startX
+    const movedY = e.clientY - dragging.startY
 
-    onSignatureMove(dragging.id, {
-      x: Math.max(0, newX),
-      y: Math.max(0, newY),
+    // Convert pixel movement to document coordinates
+    const docMovedX = movedX / pageScale
+    const docMovedY = movedY / pageScale
+
+    // Calculate new position
+    const newX = Math.max(0, dragging.currentX + docMovedX)
+    const newY = Math.max(0, dragging.currentY + docMovedY)
+
+    // Update the parent state
+    onSignatureMove(dragging.sigId, {
+      x: newX,
+      y: newY,
       page: pageNumber - 1,
     })
   }
@@ -53,71 +67,73 @@ export default function PDFViewerEasy({ pdfUrl, signatures, onSignatureMove }) {
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
-      style={{ width: '100%', userSelect: 'none' }}
+      style={{
+        width: '100%',
+        userSelect: 'none',
+      }}
     >
       {/* PDF Viewer Container */}
       <div
+        ref={pageContainerRef}
         style={{
           border: '4px solid #1d4ed8',
           borderRadius: '12px',
           backgroundColor: '#eff6ff',
-          padding: '24px',
+          padding: '20px',
           minHeight: '600px',
           overflow: 'auto',
           position: 'relative',
+          display: 'flex',
+          justifyContent: 'center',
         }}
       >
         {pdfUrl ? (
           <Document
             file={pdfUrl}
             onLoadSuccess={({ numPages }) => setNumPages(numPages)}
-            loading={<div style={{ textAlign: 'center', padding: '60px', fontSize: '18px' }}>📄 Loading PDF...</div>}
+            loading={<div style={{ textAlign: 'center', padding: '60px' }}>📄 Loading PDF...</div>}
           >
-            <div style={{ display: 'flex', justifyContent: 'center' }}>
-              <div style={{ position: 'relative', display: 'inline-block' }}>
-                <Page
-                  pageNumber={pageNumber}
-                  scale={1.5}
-                  renderTextLayer={false}
-                  renderAnnotationLayer={false}
-                  onLoadSuccess={(page) => {
-                    if (page?.width && page?.originalWidth) {
-                      setPageScale(page.width / page.originalWidth)
-                    }
-                  }}
-                />
+            <div style={{ position: 'relative', display: 'inline-block' }}>
+              <Page
+                pageNumber={pageNumber}
+                scale={1.5}
+                renderTextLayer={false}
+                renderAnnotationLayer={false}
+                onLoadSuccess={(page) => {
+                  if (page?.width && page?.originalWidth) {
+                    setPageScale(page.width / page.originalWidth)
+                  }
+                }}
+              />
 
-                {/* Signatures Overlay */}
-                <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
-                  {currentPageSigs.map((sig) => (
+              {/* Signature Boxes Layer */}
+              <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+                {currentPageSigs.map((sig) => {
+                  const x = (sig.position?.x || 0) * pageScale
+                  const y = (sig.position?.y || 0) * pageScale
+                  const w = (sig.width || 150) * pageScale
+                  const h = (sig.height || 60) * pageScale
+                  const isDragging = dragging?.sigId === sig.id
+
+                  return (
                     <div
                       key={sig.id}
                       style={{
                         position: 'absolute',
-                        left: `${(sig.position?.x || 0) * pageScale}px`,
-                        top: `${(sig.position?.y || 0) * pageScale}px`,
-                        width: `${(sig.width || 150) * pageScale}px`,
-                        height: `${(sig.height || 60) * pageScale}px`,
-                        border: dragging?.id === sig.id ? '3px solid #dc2626' : '2px solid #3b82f6',
+                        left: `${x}px`,
+                        top: `${y}px`,
+                        width: `${w}px`,
+                        height: `${h}px`,
+                        border: isDragging ? '4px solid #dc2626' : '2px solid #3b82f6',
                         borderRadius: '4px',
                         backgroundColor: '#ffffff',
-                        cursor: dragging?.id === sig.id ? 'grabbing' : 'grab',
+                        cursor: isDragging ? 'grabbing' : 'grab',
                         pointerEvents: 'auto',
-                        boxShadow: dragging?.id === sig.id ? '0 0 12px rgba(220, 38, 38, 0.5)' : '0 2px 8px rgba(0, 0, 0, 0.15)',
+                        boxShadow: isDragging ? '0 0 15px rgba(220, 38, 38, 0.7)' : '0 2px 8px rgba(0, 0, 0, 0.2)',
                         overflow: 'hidden',
+                        transition: isDragging ? 'none' : 'box-shadow 0.15s ease',
                       }}
-                      onMouseDown={(e) => handleSigMouseDown(e, sig.id, sig)}
-                      onTouchStart={(e) => {
-                        const touch = e.touches[0]
-                        e.preventDefault()
-                        setDragging({
-                          id: sig.id,
-                          startX: touch.clientX,
-                          startY: touch.clientY,
-                          sigX: sig.position?.x || 0,
-                          sigY: sig.position?.y || 0,
-                        })
-                      }}
+                      onMouseDown={(e) => handleMouseDown(e, sig.id, sig)}
                     >
                       <img
                         src={sig.url}
@@ -132,42 +148,44 @@ export default function PDFViewerEasy({ pdfUrl, signatures, onSignatureMove }) {
                       />
 
                       {/* Delete Button */}
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          onSignatureMove(sig.id, { deleted: true })
-                        }}
-                        style={{
-                          position: 'absolute',
-                          top: '-12px',
-                          right: '-12px',
-                          width: '28px',
-                          height: '28px',
-                          borderRadius: '50%',
-                          backgroundColor: '#ef4444',
-                          color: 'white',
-                          border: 'none',
-                          cursor: 'pointer',
-                          fontSize: '16px',
-                          fontWeight: 'bold',
-                          pointerEvents: 'auto',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
-                        }}
-                      >
-                        ×
-                      </button>
+                      {!isDragging && (
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            onSignatureMove(sig.id, { deleted: true })
+                          }}
+                          style={{
+                            position: 'absolute',
+                            top: '-12px',
+                            right: '-12px',
+                            width: '28px',
+                            height: '28px',
+                            borderRadius: '50%',
+                            backgroundColor: '#ef4444',
+                            color: 'white',
+                            border: 'none',
+                            cursor: 'pointer',
+                            fontSize: '16px',
+                            fontWeight: 'bold',
+                            pointerEvents: 'auto',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
+                          }}
+                        >
+                          ×
+                        </button>
+                      )}
                     </div>
-                  ))}
-                </div>
+                  )
+                })}
               </div>
             </div>
           </Document>
         ) : (
-          <div style={{ textAlign: 'center', padding: '60px', color: '#666', fontSize: '16px' }}>
-            📄 No PDF uploaded yet
+          <div style={{ textAlign: 'center', padding: '60px', color: '#999' }}>
+            📄 No PDF uploaded
           </div>
         )}
       </div>
@@ -179,7 +197,7 @@ export default function PDFViewerEasy({ pdfUrl, signatures, onSignatureMove }) {
             onClick={() => setPageNumber(Math.max(1, pageNumber - 1))}
             disabled={pageNumber <= 1}
             style={{
-              padding: '12px 24px',
+              padding: '10px 20px',
               backgroundColor: pageNumber <= 1 ? '#d1d5db' : '#2563eb',
               color: 'white',
               border: 'none',
@@ -189,16 +207,16 @@ export default function PDFViewerEasy({ pdfUrl, signatures, onSignatureMove }) {
               fontSize: '16px',
             }}
           >
-            ← Previous
+            ← Prev
           </button>
           <span style={{ fontSize: '16px', fontWeight: 'bold', color: '#1f2937', minWidth: '120px', textAlign: 'center' }}>
-            Page {pageNumber} / {numPages}
+            {pageNumber} / {numPages}
           </span>
           <button
             onClick={() => setPageNumber(Math.min(numPages, pageNumber + 1))}
             disabled={pageNumber >= numPages}
             style={{
-              padding: '12px 24px',
+              padding: '10px 20px',
               backgroundColor: pageNumber >= numPages ? '#d1d5db' : '#2563eb',
               color: 'white',
               border: 'none',
@@ -215,17 +233,17 @@ export default function PDFViewerEasy({ pdfUrl, signatures, onSignatureMove }) {
 
       {/* Instructions */}
       <div style={{
-        marginTop: '20px',
-        padding: '16px',
+        marginTop: '16px',
+        padding: '14px 18px',
         backgroundColor: '#fef08a',
         border: '3px solid #eab308',
         borderRadius: '8px',
         textAlign: 'center',
-        fontSize: '16px',
+        fontSize: '15px',
         fontWeight: '700',
         color: '#713f12',
       }}>
-        👆 GRAB the blue signature box and DRAG it to move • RED X to delete
+        👆 CLICK on blue signature box and DRAG it anywhere • X to delete
       </div>
     </div>
   )
