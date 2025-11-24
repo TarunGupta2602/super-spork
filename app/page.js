@@ -71,7 +71,7 @@ export default function Home() {
                 <div className="flex items-center justify-center w-8 h-8 rounded-full bg-blue-100 text-blue-600 font-bold text-lg">3</div>
                 <h2 className="text-xl sm:text-2xl font-bold text-gray-800">Preview & Position</h2>
               </div>
-              <p className="text-gray-600 mb-3 sm:mb-4 text-sm sm:text-base">Drag signatures to position them. Tap the trash icon to remove.</p>
+              <p className="text-gray-600 mb-3 sm:mb-4 text-sm sm:text-base">✏️ Drag signatures to position them on any page. You can move them to any corner or position. Tap the trash icon to remove.</p>
               <PDFViewerWrapper pdfUrl={pdfUrl} signatures={signatures} onSignatureMove={handleSignatureMove} />
             </div>
           )}
