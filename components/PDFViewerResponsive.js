@@ -10,6 +10,7 @@ export default function PDFViewerResponsive({ pdfUrl, signatures, onSignatureMov
   const [pageHeight, setPageHeight] = useState(0)
   const [containerWidth, setContainerWidth] = useState(0)
   const [placingId, setPlacingId] = useState(null)
+  const [placingTargetPage, setPlacingTargetPage] = useState(null)
   const containerRef = useRef(null)
   const overlayRef = useRef(null)
 
@@ -52,33 +53,52 @@ export default function PDFViewerResponsive({ pdfUrl, signatures, onSignatureMov
     if (!sig) return
     const newX = Math.max(0, docX - (sig.width || 150) / 2)
     const newY = Math.max(0, docY - (sig.height || 60) / 2)
-    onSignatureMove(placingId, { x: newX, y: newY, page: pageNumber - 1 })
+    const targetPageIndex = typeof placingTargetPage === 'number' ? placingTargetPage - 1 : pageNumber - 1
+  onSignatureMove(placingId, { position: { x: newX, y: newY }, page: targetPageIndex })
     setPlacingId(null)
+    setPlacingTargetPage(null)
   }
 
-  // Drag to move signature
-  const handleSigMouseDown = (e, sigId, sig) => {
+  // Drag to move signature (supports mouse and touch)
+  const startDrag = (startEvent, sigId, sig) => {
     if (placingId) return
-    e.preventDefault()
-    e.stopPropagation()
-    const startX = e.clientX
-    const startY = e.clientY
+    startEvent.preventDefault()
+    startEvent.stopPropagation()
+
+    const rect = overlayRef.current && overlayRef.current.getBoundingClientRect()
+    if (!rect) return
+
+    const getClient = (ev) => {
+      if (ev.touches && ev.touches.length > 0) return { x: ev.touches[0].clientX, y: ev.touches[0].clientY }
+      return { x: ev.clientX, y: ev.clientY }
+    }
+
+    const start = getClient(startEvent)
+    const startX = start.x
+    const startY = start.y
     const currentX = sig.position?.x || 0
     const currentY = sig.position?.y || 0
-    const rect = overlayRef.current.getBoundingClientRect()
     const scaleX = 595 / rect.width
     const scaleY = 842 / rect.height
-    const handleMouseMove = (moveE) => {
-      const deltaX = (moveE.clientX - startX) * scaleX
-      const deltaY = (moveE.clientY - startY) * scaleY
-      onSignatureMove(sigId, { x: Math.max(0, currentX + deltaX), y: Math.max(0, currentY + deltaY), page: pageNumber - 1 })
+
+      const onMove = (moveE) => {
+      const mv = getClient(moveE)
+      const deltaX = (mv.x - startX) * scaleX
+      const deltaY = (mv.y - startY) * scaleY
+      onSignatureMove(sigId, { position: { x: Math.max(0, currentX + deltaX), y: Math.max(0, currentY + deltaY) }, page: sig.page ?? pageNumber - 1 })
     }
-    const handleMouseUp = () => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
+
+    const end = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', end)
+      document.removeEventListener('touchmove', onMove)
+      document.removeEventListener('touchend', end)
     }
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
+
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', end)
+    document.addEventListener('touchmove', onMove, { passive: false })
+    document.addEventListener('touchend', end)
   }
 
   // Calculate scaled PDF size for responsiveness
@@ -86,6 +106,13 @@ export default function PDFViewerResponsive({ pdfUrl, signatures, onSignatureMov
   const scale = pageWidth ? maxWidth / pageWidth : 1
   const scaledWidth = pageWidth * scale
   const scaledHeight = pageHeight * scale
+
+  // Ensure placingTargetPage defaults to current visible page when starting
+  useEffect(() => {
+    if (!placingTargetPage && pageNumber) {
+      setPlacingTargetPage(pageNumber)
+    }
+  }, [pageNumber, placingTargetPage])
 
   return (
     <div ref={containerRef} style={{ width: '100%', maxWidth: '100vw', margin: '0 auto' }}>
@@ -127,13 +154,18 @@ export default function PDFViewerResponsive({ pdfUrl, signatures, onSignatureMov
               {currentPageSigs.map(sig => {
                 const scaleX = scaledWidth / 595
                 const scaleY = scaledHeight / 842
+                // support legacy top-level x/y as well as position object
+                const posX = (sig.position?.x ?? sig.x ?? 0) * scaleX
+                const posY = (sig.position?.y ?? sig.y ?? 0) * scaleY
+                const sigIndex = signatures.findIndex(s => s.id === sig.id)
+                const zIndex = 200 - (sigIndex >= 0 ? sigIndex : 0)
                 return (
                   <div
                     key={sig.id}
                     style={{
                       position: 'absolute',
-                      left: (sig.position?.x || 0) * scaleX,
-                      top: (sig.position?.y || 0) * scaleY,
+                      left: posX,
+                      top: posY,
                       width: (sig.width || 150) * scaleX,
                       height: (sig.height || 60) * scaleY,
                       border: '2px solid #3b82f6',
@@ -143,14 +175,28 @@ export default function PDFViewerResponsive({ pdfUrl, signatures, onSignatureMov
                       pointerEvents: 'auto',
                       boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
                       overflow: 'hidden',
+                      zIndex,
                     }}
-                    onMouseDown={e => handleSigMouseDown(e, sig.id, sig)}
+                    onMouseDown={e => startDrag(e, sig.id, sig)}
+                    onTouchStart={e => startDrag(e, sig.id, sig)}
                   >
                     <img src={sig.url} alt="Signature" style={{ width: '100%', height: '100%', objectFit: 'contain', pointerEvents: 'none' }} />
-                    <button
-                      onClick={e => { e.stopPropagation(); onSignatureMove(sig.id, { deleted: true }) }}
-                      style={{ position: 'absolute', top: -12, right: -12, width: 26, height: 26, borderRadius: '50%', background: '#ef4444', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 700, pointerEvents: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                    >×</button>
+                    <div style={{ position: 'absolute', top: -12, right: -12, display: 'flex', gap: 6 }}>
+                      <button
+                        onClick={e => { e.stopPropagation(); onSignatureMove(sig.id, { reorder: 'forward' }) }}
+                        title="Bring forward"
+                        style={{ width: 26, height: 26, borderRadius: 6, background: '#f3f4f6', color: '#111827', border: '1px solid #e5e7eb', cursor: 'pointer', pointerEvents: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12 }}
+                      >▲</button>
+                      <button
+                        onClick={e => { e.stopPropagation(); onSignatureMove(sig.id, { reorder: 'backward' }) }}
+                        title="Send backward"
+                        style={{ width: 26, height: 26, borderRadius: 6, background: '#f3f4f6', color: '#111827', border: '1px solid #e5e7eb', cursor: 'pointer', pointerEvents: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12 }}
+                      >▼</button>
+                      <button
+                        onClick={e => { e.stopPropagation(); onSignatureMove(sig.id, { deleted: true }) }}
+                        style={{ width: 26, height: 26, borderRadius: '50%', background: '#ef4444', color: '#fff', border: 'none', cursor: 'pointer', fontWeight: 700, pointerEvents: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                      >×</button>
+                    </div>
                   </div>
                 )
               })}
@@ -170,9 +216,24 @@ export default function PDFViewerResponsive({ pdfUrl, signatures, onSignatureMov
       {signatures.length > 0 && (
         <div style={{ marginTop: 16, padding: 12, background: '#f0fdf4', border: '2px solid #86efac', borderRadius: 8 }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: '#166534', marginBottom: 8 }}>📝 Click to place or adjust signatures:</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+            {/* Page selector */}
+            {numPages > 1 && (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginRight: 8 }}>
+                <label style={{ fontSize: 13, fontWeight: 600, color: '#065f46' }}>Target page</label>
+                <select value={placingTargetPage || pageNumber} onChange={(e) => setPlacingTargetPage(Number(e.target.value))} style={{ padding: '8px 10px', borderRadius: 6, border: '1px solid #c7f9e0' }}>
+                  {Array.from({ length: numPages }).map((_, i) => (
+                    <option key={i} value={i + 1}>{i + 1}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
             {signatures.map(sig => (
-              <button key={sig.id} onClick={() => setPlacingId(sig.id === placingId ? null : sig.id)} style={{ padding: '10px 18px', background: sig.id === placingId ? '#22c55e' : '#d1fae5', color: sig.id === placingId ? '#fff' : '#065f46', border: sig.id === placingId ? '2px solid #16a34a' : '2px solid #10b981', borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 600, transition: 'all 0.2s' }}>{sig.id === placingId ? '✓ READY' : '📍 Place'}</button>
+              <div key={sig.id} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <button onClick={() => { setPlacingId(sig.id === placingId ? null : sig.id); if (!placingTargetPage) setPlacingTargetPage(pageNumber) }} style={{ padding: '10px 18px', background: sig.id === placingId ? '#22c55e' : '#d1fae5', color: sig.id === placingId ? '#fff' : '#065f46', border: sig.id === placingId ? '2px solid #16a34a' : '2px solid #10b981', borderRadius: 6, cursor: 'pointer', fontSize: 14, fontWeight: 600, transition: 'all 0.2s' }}>{sig.id === placingId ? '✓ READY' : '📍 Place'}</button>
+                <div style={{ fontSize: 13, color: '#374151' }}>Page: { (sig.page ?? 0) + 1 }</div>
+              </div>
             ))}
           </div>
         </div>

@@ -19,8 +19,8 @@ export const metadata = {
   openGraph: {
     title: "Signer.in - Free PDF Signer",
     description: "Sign PDFs online for free with no login required. 100% secure with Supabase.",
-    url: "https://signer.in/",
-    siteName: "Signer.in",
+
+
     images: [
       {
         url: "/file.svg",

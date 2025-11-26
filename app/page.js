@@ -16,9 +16,51 @@ export default function Home() {
   const handleSignatureMove = (id, updates) => {
     if (updates.deleted) {
       setSignatures(prev => prev.filter(sig => sig.id !== id))
-    } else {
-      setSignatures(prev => prev.map(sig => sig.id === id ? { ...sig, ...updates } : sig))
+      return
     }
+
+    // Handle reorder actions separately
+    if (updates.reorder) {
+      setSignatures(prev => {
+        const idx = prev.findIndex(s => s.id === id)
+        if (idx === -1) return prev
+        const next = [...prev]
+        const [item] = next.splice(idx, 1)
+        switch (updates.reorder) {
+          case 'front':
+            next.unshift(item)
+            break
+          case 'back':
+            next.push(item)
+            break
+          case 'forward':
+            next.splice(Math.max(0, idx - 1), 0, item)
+            break
+          case 'backward':
+            next.splice(Math.min(next.length, idx + 1), 0, item)
+            break
+          default:
+            return prev
+        }
+        return next
+      })
+      return
+    }
+
+    // Default: apply position/other updates
+    setSignatures(prev => prev.map(sig => {
+      if (sig.id !== id) return sig
+      // normalize position updates: allow callers to send { x, y } or { position: { x,y } }
+      const incomingPos = updates.position ? updates.position : (typeof updates.x === 'number' || typeof updates.y === 'number') ? { x: updates.x ?? sig.position?.x ?? sig.x, y: updates.y ?? sig.position?.y ?? sig.y } : undefined
+      const rest = { ...updates }
+      delete rest.x; delete rest.y; delete rest.position
+      delete rest.reorder
+      return {
+        ...sig,
+        ...(incomingPos ? { position: { ...(sig.position || { x: sig.x || 0, y: sig.y || 0 }), ...incomingPos } } : {}),
+        ...rest
+      }
+    }))
   }
 
   return (
